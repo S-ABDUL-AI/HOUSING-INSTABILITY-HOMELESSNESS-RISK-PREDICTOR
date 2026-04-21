@@ -7,6 +7,8 @@ rankings, budget simulation, counterfactual rent / unemployment levers, and an e
 
 from __future__ import annotations
 
+import html
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
@@ -69,6 +71,24 @@ st.markdown(
     }
     div[data-testid="stMetricValue"] { color: #0f172a !important; }
     div[data-testid="stMetricLabel"] { color: #475569 !important; }
+    .exec-snapshot {
+        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 1.1rem 1.25rem 1.2rem 1.25rem;
+        margin-bottom: 1.15rem;
+        box-shadow: 0 6px 24px rgba(15, 23, 42, 0.08);
+        border-left: 5px solid #1d4ed8;
+    }
+    .exec-snapshot .snap-title {
+        font-size: 0.72rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+        color: #64748b; margin: 0 0 0.35rem 0;
+    }
+    .exec-snapshot .snap-headline { font-size: 1.2rem; font-weight: 700; color: #0f172a; margin: 0 0 0.75rem 0; line-height: 1.35; }
+    .exec-snapshot .snap-rec {
+        background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px;
+        padding: 0.85rem 1rem; margin-top: 0.5rem; color: #1e3a8a; font-size: 1.02rem; line-height: 1.5; font-weight: 600;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -128,16 +148,109 @@ def _hero() -> None:
 <div class="exec-hero">
   <h1>Housing instability & homelessness risk predictor</h1>
   <p>
-    Executive dashboard for <b>regional prioritisation</b>: by default the app builds a <b>hybrid federal panel</b>
-    (HUD Fair Market Rents from HUD’s public ArcGIS service, joined to <b>U.S. Census ACS</b> CBSA income &amp; unemployment).
-    If those services are unavailable, it <b>falls back automatically</b> to a synthetic backup so workflows keep running.
-    You may still upload your own CSV. Train a transparent classifier, then use outputs for <b>funding signals</b>,
-    <b>priority geographies</b>, and <b>counterfactual levers</b>—not a substitute for statutory definitions or local intake data.
+    <b>At-a-glance:</b> the <b>Executive snapshot</b> below refreshes from your loaded panel (HUD + Census hybrid by default, or backup synthetic).
+    <b>Train the model</b> in the sidebar to surface predicted risk, accuracy, and a portfolio-level <b>recommendation</b>—then scroll for rankings, budget simulation, and counterfactuals.
   </p>
 </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def _portfolio_tier_and_recommendation(pred_df: pd.DataFrame | None, df_full: pd.DataFrame) -> tuple[str, str]:
+    """Pick a single tier + policy line for the headline (predicted risk if available, else training labels)."""
+    if pred_df is not None and "predicted_risk" in pred_df.columns:
+        s = pred_df["predicted_risk"]
+        ph = float((s == "High").mean())
+        pm = float((s == "Medium").mean())
+        if ph >= 0.10:
+            return "High", recommendation_for_risk("High")
+        if ph + pm >= 0.38:
+            return "Medium", recommendation_for_risk("Medium")
+        return "Low", recommendation_for_risk("Low")
+    s = df_full["risk_label"]
+    ph = float((s == "High").mean())
+    pm = float((s == "Medium").mean())
+    if ph >= 0.10:
+        return "High (label-based)", recommendation_for_risk("High")
+    if ph + pm >= 0.38:
+        return "Medium (label-based)", recommendation_for_risk("Medium")
+    return "Low (label-based)", recommendation_for_risk("Low")
+
+
+def _render_executive_snapshot(
+    df_full: pd.DataFrame,
+    pred_df: pd.DataFrame | None,
+    prov: dict,
+    trained,
+) -> None:
+    """Dynamic KPIs + recommendation visible without scrolling."""
+    mode = prov.get("mode", "—")
+    mode_lbl = {
+        "hybrid": "HUD FMR + Census ACS",
+        "synthetic_fallback": "Synthetic backup",
+        "synthetic_backup_manual": "Synthetic (manual)",
+        "csv_upload": "Uploaded CSV",
+    }.get(str(mode), str(mode))
+
+    med_rent = float(df_full["median_rent"].median())
+    med_inc = float(df_full["median_income"].median())
+    med_ue = float(df_full["unemployment_rate"].median())
+    med_ev = float(df_full["eviction_rate"].median())
+    lbl_hi = float((df_full["risk_label"] == "High").mean())
+
+    tier, rec_text = _portfolio_tier_and_recommendation(pred_df, df_full)
+    tier_short = tier.replace(" (label-based)", "").strip()
+
+    top_city = "—"
+    if pred_df is not None and len(pred_df):
+        rk = rank_cities_by_risk(pred_df)
+        if not rk.empty:
+            top_city = str(rk.iloc[0]["city"])
+
+    headline = (
+        f"{df_full['city'].nunique():,} regions · {len(df_full):,} rows · "
+        f"Labels High: {lbl_hi:.0%} · Panel: {mode_lbl}"
+    )
+    if pred_df is not None:
+        ph = float((pred_df["predicted_risk"] == "High").mean())
+        headline += f" · Model High: {ph:.0%}"
+        if trained is not None:
+            headline += f" · Accuracy {trained.accuracy:.0%}"
+        headline += f" · Top pressure: {top_city}"
+
+    st.markdown('<div class="exec-snapshot">', unsafe_allow_html=True)
+    st.markdown('<p class="snap-title">Executive snapshot</p>', unsafe_allow_html=True)
+    st.markdown(
+        f'<p class="snap-headline">{html.escape(headline)}</p>',
+        unsafe_allow_html=True,
+    )
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        st.metric("Median rent (2-BR FMR or panel)", f"${med_rent:,.0f}")
+    with k2:
+        st.metric("Median household income", f"${med_inc:,.0f}")
+    with k3:
+        st.metric("Median unemployment rate", f"{med_ue:.1%}")
+    with k4:
+        st.metric("Median eviction proxy", f"{med_ev:.1%}")
+    with k5:
+        if pred_df is not None and trained is not None:
+            st.metric("Portfolio tier (model)", tier_short)
+        else:
+            st.metric("Portfolio tier (labels)", tier_short)
+
+    tier_display = html.escape(tier_short)
+    rec_safe = html.escape(rec_text)
+    st.markdown(
+        f'<div class="snap-rec"><span style="color:#1e40af;font-size:0.75rem;font-weight:700;letter-spacing:0.06em;">'
+        f"RECOMMENDED ACTION · {tier_display}</span><br/>{rec_safe}</div>",
+        unsafe_allow_html=True,
+    )
+    if pred_df is None:
+        st.caption("Train the model in the sidebar to add **predicted** risk shares, accuracy, and geography-level recommendations in this strip.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 _init_state()
@@ -170,19 +283,26 @@ with st.sidebar.expander("Data lineage & HUD / Census notes", expanded=False):
         "For token-based HUD User FMR/IL endpoints, see [HUD User API](https://www.huduser.gov/portal/dataset/fmr-api.html)."
     )
 
-up = st.sidebar.file_uploader("Upload CSV (optional)", type=["csv"], help="Must include: " + ", ".join(REQUIRED_COLS))
-if up is not None:
-    try:
-        st.session_state.df_full = load_csv_bytes(up.getvalue())
-        st.session_state.trained = None
-        st.session_state.predictions_df = None
-        st.session_state.data_provenance = {
-            "mode": "csv_upload",
-            "detail": "Using columns from your uploaded file (overrides federal hybrid until you reload it).",
-        }
-        st.sidebar.success("CSV loaded — train the model to refresh scores.")
-    except Exception as exc:  # noqa: BLE001
-        st.sidebar.error(f"Could not load CSV: {exc}")
+with st.sidebar.expander("Upload CSV (optional)", expanded=False):
+    up = st.sidebar.file_uploader(
+        "CSV file",
+        type=["csv"],
+        label_visibility="collapsed",
+        help="Must include: " + ", ".join(REQUIRED_COLS),
+        key="csv_uploader_sidebar",
+    )
+    if up is not None:
+        try:
+            st.session_state.df_full = load_csv_bytes(up.getvalue())
+            st.session_state.trained = None
+            st.session_state.predictions_df = None
+            st.session_state.data_provenance = {
+                "mode": "csv_upload",
+                "detail": "Using columns from your uploaded file (overrides federal hybrid until you reload it).",
+            }
+            st.success("CSV loaded — train the model to refresh scores.")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not load CSV: {exc}")
 
 c1, c2 = st.sidebar.columns(2)
 with c1:
@@ -209,12 +329,15 @@ with c2:
         st.rerun()
 
 all_cities = sorted(st.session_state.df_full["city"].unique().tolist())
-city_filter = st.sidebar.multiselect(
-    "City filter (display)",
-    options=all_cities,
-    default=all_cities,
-    help="Filters tables and charts in the main workspace. Training always uses the full loaded dataset.",
-)
+with st.sidebar.expander("City filter (display)", expanded=False):
+    city_filter = st.sidebar.multiselect(
+        "Regions shown in main tables & charts",
+        options=all_cities,
+        default=all_cities,
+        help="Training always uses the **full** loaded dataset; this only filters what you **see**.",
+        label_visibility="visible",
+        key="city_filter_ms",
+    )
 
 budget_m = st.sidebar.number_input("Simulation budget ($ millions)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
 
@@ -237,43 +360,23 @@ if st.sidebar.button("Train / refresh model", type="primary", use_container_widt
             st.sidebar.error(f"Training failed: {exc}")
 
 # ---------------------------------------------------------------------------
-# Main metrics (dataset-level)
+# Executive snapshot + dataset (main)
 # ---------------------------------------------------------------------------
-df_full: pd.DataFrame = st.session_state.df_full
-view_df = filter_by_cities(df_full, city_filter)
+df_full = st.session_state.df_full
 pred_df: pd.DataFrame | None = st.session_state.predictions_df
+view_df = filter_by_cities(df_full, city_filter)
 
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    st.metric("Observations (full dataset)", f"{len(df_full):,}")
-with m2:
-    st.metric("Geographies (cities)", f"{df_full['city'].nunique()}")
-with m3:
-    if pred_df is not None:
-        st.metric("Predicted high-risk share", f"{(pred_df['predicted_risk'] == 'High').mean():.1%}")
-    else:
-        st.metric("Predicted high-risk share", "—", help="Train the model to compute.")
-with m4:
-    if st.session_state.trained is not None:
-        st.metric("Hold-out accuracy", f"{st.session_state.trained.accuracy:.1%}")
-    else:
-        st.metric("Hold-out accuracy", "—")
+_render_executive_snapshot(df_full, pred_df, prov, st.session_state.trained)
 
-# ---------------------------------------------------------------------------
-# Dataset preview
-# ---------------------------------------------------------------------------
-st.markdown('<p class="section-title">Dataset preview</p>', unsafe_allow_html=True)
-st.markdown('<div class="section-card">', unsafe_allow_html=True)
-st.caption(
-    "Filtered view respects the sidebar city filter; training uses **all** rows in the loaded dataset. "
-    "Default rows are **HUD Fair Market Rent (2‑BR)** joined to **Census ACS** CBSA economics unless you uploaded a CSV "
-    "or are on synthetic backup—see sidebar **Data lineage**."
-)
-st.dataframe(view_df.head(25), use_container_width=True, height=280)
-st.markdown("</div>", unsafe_allow_html=True)
+with st.expander("Dataset preview", expanded=False):
+    st.caption(
+        "Training uses **all** rows in the loaded dataset; the table below respects the **City filter** expander in the sidebar. "
+        "**Hybrid default:** HUD 2‑BR FMR + Census ACS CBSA fields unless you uploaded CSV or use synthetic backup—see **Data lineage**."
+    )
+    st.dataframe(view_df.head(40), use_container_width=True, height=320)
 
 if pred_df is None:
-    st.info("Train the model from the sidebar to unlock predictions, charts, policy layers, and simulations.")
+    st.info("**Next step:** use **Train / refresh model** in the sidebar to generate predictions, charts, policy layers, and simulations.")
     st.stop()
 
 # Narrow predictions for display
