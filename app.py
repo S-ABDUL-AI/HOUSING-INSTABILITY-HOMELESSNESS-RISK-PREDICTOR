@@ -750,22 +750,44 @@ _render_executive_snapshot(
 st.markdown('<div class="section-card">', unsafe_allow_html=True)
 st.subheader("Insight report")
 st.caption("Download location: use the button below.")
-report_pdf = _build_insight_report_pdf(
-    view_df=view_df,
-    pred_view=pred_view_for_snapshot,
-    selected_region=selected_region_label,
-    prov=prov,
-    trained=st.session_state.trained,
-    budget_m=float(budget_m),
-)
 report_scope_slug = selected_region_label.replace(" ", "_").replace(",", "").replace("/", "-")
-st.download_button(
-    "Download insight report (.pdf)",
-    data=report_pdf,
-    file_name=f"housing_insight_report_{report_scope_slug}.pdf",
-    mime="application/pdf",
-    use_container_width=True,
-)
+try:
+    report_pdf = _build_insight_report_pdf(
+        view_df=view_df,
+        pred_view=pred_view_for_snapshot,
+        selected_region=selected_region_label,
+        prov=prov,
+        trained=st.session_state.trained,
+        budget_m=float(budget_m),
+    )
+    st.download_button(
+        "Download insight report (.pdf)",
+        data=report_pdf,
+        file_name=f"housing_insight_report_{report_scope_slug}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+    )
+except ModuleNotFoundError as exc:
+    # Keep the app usable on environments where optional PDF libs were not installed yet.
+    st.warning(
+        f"PDF export is unavailable on this deployment ({exc}). "
+        "Use the HTML fallback below until dependencies are refreshed."
+    )
+    report_html_fallback = _build_mckinsey_report_html(
+        view_df=view_df,
+        pred_view=pred_view_for_snapshot,
+        selected_region=selected_region_label,
+        prov=prov,
+        trained=st.session_state.trained,
+        budget_m=float(budget_m),
+    )
+    st.download_button(
+        "Download insight report (.html fallback)",
+        data=report_html_fallback,
+        file_name=f"housing_insight_report_{report_scope_slug}.html",
+        mime="text/html",
+        use_container_width=True,
+    )
 st.markdown("</div>", unsafe_allow_html=True)
 
 with st.expander("Dataset preview", expanded=False):
