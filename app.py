@@ -7,6 +7,7 @@ rankings, budget simulation, counterfactual rent / unemployment levers, and an e
 
 from __future__ import annotations
 
+from datetime import datetime
 import html
 
 import matplotlib.pyplot as plt
@@ -255,28 +256,28 @@ def _render_executive_snapshot(
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
         st.metric(
-            "🏠 Median rent",
+            "Median rent",
             f"${med_rent:,.0f}",
             delta=f"{med_rent - base_rent:+,.0f} vs all",
             delta_color="inverse",
         )
     with k2:
         st.metric(
-            "💼 Median household income",
+            "Median household income",
             f"${med_inc:,.0f}",
             delta=f"{med_inc - base_inc:+,.0f} vs all",
             delta_color="normal",
         )
     with k3:
         st.metric(
-            "📉 Median unemployment",
+            "Median unemployment",
             f"{med_ue:.1%}",
             delta=f"{(med_ue - base_ue) * 100:+.2f} pp vs all",
             delta_color="inverse",
         )
     with k4:
         st.metric(
-            "🏚️ Median eviction proxy",
+            "Median eviction proxy",
             f"{med_ev:.1%}",
             delta=f"{(med_ev - base_ev) * 100:+.2f} pp vs all",
             delta_color="inverse",
@@ -289,9 +290,9 @@ def _render_executive_snapshot(
 
     with k5:
         if pred_view is not None and trained is not None:
-            st.metric("🚦 Portfolio tier (model)", tier_short, delta=status_text, delta_color=status_delta_color)
+            st.metric("Portfolio tier (model)", tier_short, delta=status_text, delta_color=status_delta_color)
         else:
-            st.metric("🚦 Portfolio tier (labels)", tier_short, delta=status_text, delta_color=status_delta_color)
+            st.metric("Portfolio tier (labels)", tier_short, delta=status_text, delta_color=status_delta_color)
         st.markdown(
             f"<span class='tier-pill {pill_class}'>{html.escape(status_text)}</span>",
             unsafe_allow_html=True,
@@ -309,6 +310,126 @@ def _render_executive_snapshot(
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _build_mckinsey_report_html(
+    view_df: pd.DataFrame,
+    pred_view: pd.DataFrame | None,
+    selected_region: str,
+    prov: dict,
+    trained,
+    budget_m: float,
+) -> str:
+    """Generate a polished, McKinsey-style insight report as standalone HTML."""
+    mode = prov.get("mode", "—")
+    mode_lbl = {
+        "hybrid": "HUD FMR + Census ACS",
+        "synthetic_fallback": "Synthetic backup",
+        "synthetic_backup_manual": "Synthetic (manual)",
+        "csv_upload": "Uploaded CSV",
+    }.get(str(mode), str(mode))
+    n_rows = len(view_df)
+    n_regions = int(view_df["city"].nunique()) if n_rows else 0
+    med_rent = float(view_df["median_rent"].median()) if n_rows else 0.0
+    med_inc = float(view_df["median_income"].median()) if n_rows else 0.0
+    med_ue = float(view_df["unemployment_rate"].median()) if n_rows else 0.0
+    med_ev = float(view_df["eviction_rate"].median()) if n_rows else 0.0
+
+    if pred_view is not None and len(pred_view):
+        work = pred_view.copy()
+        risk_col = "predicted_risk"
+        high_share = float((work[risk_col] == "High").mean())
+        med_share = float((work[risk_col] == "Medium").mean())
+        low_share = float((work[risk_col] == "Low").mean())
+        rank_df = rank_cities_by_risk(work, pred_col=risk_col).head(5)
+    else:
+        work = view_df.copy()
+        work["predicted_risk"] = work["risk_label"]
+        risk_col = "predicted_risk"
+        high_share = float((work[risk_col] == "High").mean()) if len(work) else 0.0
+        med_share = float((work[risk_col] == "Medium").mean()) if len(work) else 0.0
+        low_share = float((work[risk_col] == "Low").mean()) if len(work) else 0.0
+        rank_df = rank_cities_by_risk(work, pred_col=risk_col).head(5)
+
+    top_city = str(rank_df.iloc[0]["city"]) if not rank_df.empty else "—"
+    tier, recommendation = _portfolio_tier_and_recommendation(pred_view, view_df)
+    tier_short = tier.replace(" (label-based)", "").strip()
+    acc_text = f"{trained.accuracy:.1%}" if trained is not None else "N/A (model not trained this run)"
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if not rank_df.empty:
+        rank_rows = "".join(
+            f"<tr><td>{int(r.priority_rank)}</td><td>{html.escape(str(r.city))}</td>"
+            f"<td>{float(r.high_share):.1%}</td><td>{float(r.risk_index):.2f}</td></tr>"
+            for r in rank_df.itertuples(index=False)
+        )
+    else:
+        rank_rows = "<tr><td colspan='4'>No rows available for ranking in selected scope.</td></tr>"
+
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Housing Instability Insight Report</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      color: #111827; margin: 28px; line-height: 1.45;
+    }}
+    .header {{ border-bottom: 3px solid #006b5f; padding-bottom: 10px; margin-bottom: 18px; }}
+    .header h1 {{ margin: 0; font-size: 26px; font-weight: 700; letter-spacing: 0.01em; }}
+    .subtle {{ color: #4b5563; font-size: 13px; }}
+    .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0 18px; }}
+    .kpi {{ border: 1px solid #d1d5db; border-top: 3px solid #006b5f; border-radius: 6px; padding: 10px; }}
+    .kpi .label {{ color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }}
+    .kpi .value {{ font-size: 24px; font-weight: 700; margin-top: 4px; }}
+    h2 {{ font-size: 17px; margin: 18px 0 8px; color: #0f172a; }}
+    .box {{ background: #f9fafb; border-left: 4px solid #006b5f; padding: 12px 14px; border-radius: 4px; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
+    th, td {{ border: 1px solid #e5e7eb; padding: 8px; font-size: 13px; text-align: left; }}
+    th {{ background: #f3f4f6; font-weight: 700; }}
+    .footer {{ margin-top: 24px; font-size: 12px; color: #6b7280; }}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Housing Instability & Homelessness Risk — Insight Report</h1>
+    <div class="subtle">Scope: <b>{html.escape(selected_region)}</b> · Data mode: {html.escape(mode_lbl)} · Generated: {generated_at}</div>
+  </div>
+
+  <h2>Executive Summary</h2>
+  <div class="box">
+    <b>Current tier: {html.escape(tier_short)}</b>. Priority action: {html.escape(recommendation)}<br/>
+    Top pressure geography in this scope: <b>{html.escape(top_city)}</b>. Model hold-out accuracy: <b>{acc_text}</b>.
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi"><div class="label">Median rent</div><div class="value">${med_rent:,.0f}</div></div>
+    <div class="kpi"><div class="label">Median income</div><div class="value">${med_inc:,.0f}</div></div>
+    <div class="kpi"><div class="label">Median unemployment</div><div class="value">{med_ue:.1%}</div></div>
+    <div class="kpi"><div class="label">Median eviction proxy</div><div class="value">{med_ev:.1%}</div></div>
+  </div>
+
+  <h2>Risk Mix</h2>
+  <p><b>High:</b> {high_share:.1%} · <b>Medium:</b> {med_share:.1%} · <b>Low:</b> {low_share:.1%} across {n_rows:,} rows / {n_regions:,} regions.</p>
+
+  <h2>Top Priority Areas</h2>
+  <table>
+    <thead><tr><th>Rank</th><th>Region</th><th>High-risk share</th><th>Risk index</th></tr></thead>
+    <tbody>{rank_rows}</tbody>
+  </table>
+
+  <h2>Policy Implication & Action</h2>
+  <div class="box">
+    <b>Implication:</b> Concentrated high-risk pockets indicate elevated near-term housing insecurity and potential pressure on homelessness response systems.<br/>
+    <b>Action:</b> Use this tiering to target budget deployment (simulated budget: <b>${budget_m:.1f}M</b>), prioritize subsidy and stabilization interventions, and monitor labor-market shifts.
+  </div>
+
+  <div class="footer">
+    McKinsey-style one-page brief generated by the Housing Instability dashboard. This report is decision support, not a statutory determination.
+  </div>
+</body>
+</html>"""
+
+
 _init_state()
 _hero()
 
@@ -323,6 +444,7 @@ with st.sidebar.expander("How to use this app", expanded=False):
 1. Choose a region scope (or leave **All regions**) from **Region (display only)**.
 2. Click **Train / refresh model** to update predictions and snapshot KPIs.
 3. Review **Priority ranking**, **Budget simulation**, and **Counterfactual simulation**.
+4. Download the one-page **Insight report (McKinsey-style)** from the **Insight report** card below the Executive snapshot.
 """
     )
 if prov.get("mode") == "hybrid":
@@ -446,6 +568,27 @@ _render_executive_snapshot(
     trained=st.session_state.trained,
     selected_region=selected_region_label,
 )
+
+st.markdown('<div class="section-card">', unsafe_allow_html=True)
+st.subheader("Insight report (McKinsey-style)")
+st.caption("Download location: use the button below. The exported HTML is always rendered in a consistent McKinsey-style brief format.")
+report_html = _build_mckinsey_report_html(
+    view_df=view_df,
+    pred_view=pred_view_for_snapshot,
+    selected_region=selected_region_label,
+    prov=prov,
+    trained=st.session_state.trained,
+    budget_m=float(budget_m),
+)
+report_scope_slug = selected_region_label.replace(" ", "_").replace(",", "").replace("/", "-")
+st.download_button(
+    "Download insight report (.html)",
+    data=report_html,
+    file_name=f"housing_insight_report_{report_scope_slug}.html",
+    mime="text/html",
+    use_container_width=True,
+)
+st.markdown("</div>", unsafe_allow_html=True)
 
 with st.expander("Dataset preview", expanded=False):
     st.caption(
