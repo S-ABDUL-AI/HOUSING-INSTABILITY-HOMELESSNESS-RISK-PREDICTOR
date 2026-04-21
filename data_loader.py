@@ -14,6 +14,38 @@ import pandas as pd
 REQUIRED_COLS = ["city", "median_rent", "median_income", "unemployment_rate", "eviction_rate", "risk_label"]
 
 
+def stress_score(
+    median_rent: float,
+    median_income: float,
+    unemployment_rate: float,
+    eviction_rate: float,
+) -> float:
+    """Scalar stress index (same rule as synthetic labels) for consistent training labels on hybrid data."""
+    monthly_income = max(float(median_income) / 12.0, 500.0)
+    rent_burden = float(median_rent) / monthly_income
+    ue = float(unemployment_rate)
+    ev = float(eviction_rate)
+    return (
+        0.45 * np.clip((rent_burden - 0.22) / 0.35, 0, 1.5)
+        + 0.30 * (ue / 0.20)
+        + 0.25 * (ev / 0.12)
+    )
+
+
+def risk_label_from_indicators(
+    median_rent: float,
+    median_income: float,
+    unemployment_rate: float,
+    eviction_rate: float,
+) -> str:
+    stress = stress_score(median_rent, median_income, unemployment_rate, eviction_rate)
+    if stress > 0.85:
+        return "High"
+    if stress > 0.48:
+        return "Medium"
+    return "Low"
+
+
 def make_synthetic_dataset(n_rows: int = 600, random_state: int = 42) -> pd.DataFrame:
     """
     Synthetic panel: cities with correlated rent, income, unemployment, eviction, and a risk label.
@@ -39,24 +71,10 @@ def make_synthetic_dataset(n_rows: int = 600, random_state: int = 42) -> pd.Data
         city = rng.choice(cities)
         median_income = float(rng.uniform(22_000, 95_000))
         median_rent = float(rng.uniform(650, 3_200))
-        # Rent burden proxy: rent / (monthly income); higher → stress
-        monthly_income = max(median_income / 12.0, 500.0)
-        rent_burden = median_rent / monthly_income
         unemployment_rate = float(rng.uniform(0.015, 0.20))
         eviction_rate = float(rng.uniform(0.005, 0.14))
 
-        # Composite stress score → risk bucket (used as training label)
-        stress = (
-            0.45 * np.clip((rent_burden - 0.22) / 0.35, 0, 1.5)
-            + 0.30 * (unemployment_rate / 0.20)
-            + 0.25 * (eviction_rate / 0.12)
-        )
-        if stress > 0.85:
-            label = "High"
-        elif stress > 0.48:
-            label = "Medium"
-        else:
-            label = "Low"
+        label = risk_label_from_indicators(median_rent, median_income, unemployment_rate, eviction_rate)
 
         rows.append(
             {

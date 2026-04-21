@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from data_loader import REQUIRED_COLS, filter_by_cities, load_csv_bytes, make_synthetic_dataset
+from federal_data import build_hybrid_dataset
 from modeling import adjust_for_simulation, feature_importance_series, predict_dataframe, train_random_forest
 from policy import (
     allocate_budget,
@@ -74,9 +75,47 @@ st.markdown(
 )
 
 
+@st.cache_data(ttl=7200, show_spinner="Loading HUD + Census CBSA panel…")
+def _cached_federal_hybrid(max_msas: int, acs_year: str) -> tuple:
+    """Disk-backed cache so Streamlit reruns do not hammer HUD / Census."""
+    return build_hybrid_dataset(max_msas=max_msas, acs_year=acs_year)
+
+
+def _load_default_dataframe(max_msas: int = 280, acs_year: str = "2022") -> None:
+    """
+    Prefer live federal panel (HUD FMR + Census ACS). If anything fails or the join is too thin,
+    fall back to the in-repo synthetic generator so the dashboard always runs.
+    """
+    try:
+        df, meta = _cached_federal_hybrid(max_msas, acs_year)
+        if len(df) < 40:
+            raise ValueError(f"Only {len(df)} metro areas after HUD–Census join; need a larger overlap for training.")
+        st.session_state.df_full = df
+        st.session_state.data_provenance = {
+            "mode": "hybrid",
+            "detail": (
+                "**Primary:** HUD Fair Market Rents (2‑BR) via HUD ArcGIS Open Data. "
+                "**Joined:** U.S. Census Bureau ACS 5‑year median household income & unemployment rate by CBSA. "
+                "**Eviction rate:** model proxy (not HUD court filings). "
+                "**Labels (`risk_label`):** same transparent stress index used for the synthetic backup."
+            ),
+            **meta,
+        }
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.df_full = make_synthetic_dataset()
+        st.session_state.data_provenance = {
+            "mode": "synthetic_fallback",
+            "detail": (
+                "Using **synthetic backup** because the federal panel could not be built "
+                f"(network, API change, or thin join). Error: `{exc}`"
+            ),
+            "error": str(exc),
+        }
+
+
 def _init_state() -> None:
     if "df_full" not in st.session_state:
-        st.session_state.df_full = make_synthetic_dataset()
+        _load_default_dataframe()
     if "trained" not in st.session_state:
         st.session_state.trained = None
     if "predictions_df" not in st.session_state:
@@ -89,10 +128,11 @@ def _hero() -> None:
 <div class="exec-hero">
   <h1>Housing instability & homelessness risk predictor</h1>
   <p>
-    Executive dashboard for <b>regional prioritisation</b>: upload sub-regional observations (or use the demo dataset),
-    train a transparent classifier, and translate model outputs into <b>funding signals</b>, <b>priority geographies</b>,
-    and <b>counterfactual levers</b> (rent relief and employment shocks). Outputs support decisions—they are not a substitute
-    for statutory homelessness definitions or lived-experience intake data.
+    Executive dashboard for <b>regional prioritisation</b>: by default the app builds a <b>hybrid federal panel</b>
+    (HUD Fair Market Rents from HUD’s public ArcGIS service, joined to <b>U.S. Census ACS</b> CBSA income &amp; unemployment).
+    If those services are unavailable, it <b>falls back automatically</b> to a synthetic backup so workflows keep running.
+    You may still upload your own CSV. Train a transparent classifier, then use outputs for <b>funding signals</b>,
+    <b>priority geographies</b>, and <b>counterfactual levers</b>—not a substitute for statutory definitions or local intake data.
   </p>
 </div>
         """,
@@ -107,21 +147,66 @@ _hero()
 # Sidebar — data, filter, train, budget
 # ---------------------------------------------------------------------------
 st.sidebar.header("Workspace")
+prov = st.session_state.get("data_provenance") or {}
+if prov.get("mode") == "hybrid":
+    st.sidebar.success("Data: **HUD FMR + Census ACS** (hybrid)")
+elif prov.get("mode") == "synthetic_fallback":
+    st.sidebar.warning("Data: **synthetic backup** (federal panel unavailable)")
+elif prov.get("mode") == "csv_upload":
+    st.sidebar.info("Data: **uploaded CSV**")
+with st.sidebar.expander("Data lineage & HUD / Census notes", expanded=False):
+    st.markdown(prov.get("detail") or "_No lineage recorded._")
+    if prov.get("mode") == "hybrid":
+        st.caption(
+            f"HUD MSA rows pulled: **{prov.get('hud_msa_rows', '—')}** · "
+            f"Census matches: **{prov.get('acs_rows', '—')}** · "
+            f"Joined training rows: **{prov.get('joined_rows', '—')}** · "
+            f"Final rows: **{prov.get('final_rows', '—')}**"
+        )
+    st.markdown(
+        "**Sources:** [HUD Fair Market Rents (ArcGIS)](https://hudgis-hud.opendata.arcgis.com/datasets/12d2516901f947b5bb4da4e780e35f07) · "
+        "[Census ACS 5-year](https://www.census.gov/data/developers/data-sets/acs-5year.html). "
+        "Optional `CENSUS_API_KEY` environment variable raises Census rate limits. "
+        "For token-based HUD User FMR/IL endpoints, see [HUD User API](https://www.huduser.gov/portal/dataset/fmr-api.html)."
+    )
+
 up = st.sidebar.file_uploader("Upload CSV (optional)", type=["csv"], help="Must include: " + ", ".join(REQUIRED_COLS))
 if up is not None:
     try:
         st.session_state.df_full = load_csv_bytes(up.getvalue())
         st.session_state.trained = None
         st.session_state.predictions_df = None
+        st.session_state.data_provenance = {
+            "mode": "csv_upload",
+            "detail": "Using columns from your uploaded file (overrides federal hybrid until you reload it).",
+        }
         st.sidebar.success("CSV loaded — train the model to refresh scores.")
     except Exception as exc:  # noqa: BLE001
         st.sidebar.error(f"Could not load CSV: {exc}")
 
-if st.sidebar.button("Reset to synthetic demo data", use_container_width=True):
-    st.session_state.df_full = make_synthetic_dataset()
-    st.session_state.trained = None
-    st.session_state.predictions_df = None
-    st.rerun()
+c1, c2 = st.sidebar.columns(2)
+with c1:
+    if st.button(
+        "Reload federal data",
+        use_container_width=True,
+        help="Clears cache and tries HUD + Census again.",
+        key="btn_reload_federal",
+    ):
+        _cached_federal_hybrid.clear()
+        for k in ("df_full", "trained", "predictions_df", "data_provenance"):
+            st.session_state.pop(k, None)
+        _load_default_dataframe()
+        st.rerun()
+with c2:
+    if st.button("Synthetic backup", use_container_width=True, key="btn_synthetic_backup"):
+        st.session_state.df_full = make_synthetic_dataset()
+        st.session_state.trained = None
+        st.session_state.predictions_df = None
+        st.session_state.data_provenance = {
+            "mode": "synthetic_backup_manual",
+            "detail": "Synthetic dataset loaded manually (for demos or when you want offline-only rows).",
+        }
+        st.rerun()
 
 all_cities = sorted(st.session_state.df_full["city"].unique().tolist())
 city_filter = st.sidebar.multiselect(
@@ -179,7 +264,11 @@ with m4:
 # ---------------------------------------------------------------------------
 st.markdown('<p class="section-title">Dataset preview</p>', unsafe_allow_html=True)
 st.markdown('<div class="section-card">', unsafe_allow_html=True)
-st.caption("Filtered view respects the sidebar city filter; training uses **all** rows in the loaded dataset.")
+st.caption(
+    "Filtered view respects the sidebar city filter; training uses **all** rows in the loaded dataset. "
+    "Default rows are **HUD Fair Market Rent (2‑BR)** joined to **Census ACS** CBSA economics unless you uploaded a CSV "
+    "or are on synthetic backup—see sidebar **Data lineage**."
+)
 st.dataframe(view_df.head(25), use_container_width=True, height=280)
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -260,7 +349,8 @@ st.markdown(
     """
 - **High median rent** relative to income → **affordability stress** (payment-to-income pressure).
 - **High unemployment rate** → **income instability** and slower rent recovery.
-- **High eviction rate** → **housing insecurity** and churn in the rental stock.
+- **High eviction rate** (column) → on the **federal hybrid** panel this is a **stress proxy** derived from rent burden
+  and unemployment (not HUD eviction filings); treat it as a model input, not a court statistic.
 """
 )
 sample = pred_view.head(12).copy()
