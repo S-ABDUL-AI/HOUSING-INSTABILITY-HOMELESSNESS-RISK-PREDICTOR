@@ -39,7 +39,7 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Source+Sans+3:wght@400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif !important; }
     .stApp { background: #f1f5f9; }
     .exec-hero {
@@ -84,10 +84,19 @@ st.markdown(
         font-size: 0.72rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
         color: #64748b; margin: 0 0 0.35rem 0;
     }
-    .exec-snapshot .snap-headline { font-size: 1.2rem; font-weight: 700; color: #0f172a; margin: 0 0 0.75rem 0; line-height: 1.35; }
+    .exec-snapshot .snap-headline {
+        font-family: 'Inter', 'Source Sans 3', sans-serif;
+        font-size: 1.22rem; font-weight: 800; color: #0f172a; margin: 0 0 0.75rem 0; line-height: 1.35;
+    }
     .exec-snapshot .snap-rec {
         background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px;
         padding: 0.85rem 1rem; margin-top: 0.5rem; color: #1e3a8a; font-size: 1.02rem; line-height: 1.5; font-weight: 600;
+    }
+    .exec-snapshot div[data-testid="stMetric"] {
+        background: #f8fafc;
+        border: 1px solid #dbe7f3;
+        border-radius: 10px;
+        padding: 0.55rem 0.65rem;
     }
 </style>
 """,
@@ -179,6 +188,7 @@ def _portfolio_tier_and_recommendation(pred_df: pd.DataFrame | None, df_full: pd
 
 
 def _render_executive_snapshot(
+    full_df: pd.DataFrame,
     view_df: pd.DataFrame,
     pred_view: pd.DataFrame | None,
     prov: dict,
@@ -198,6 +208,10 @@ def _render_executive_snapshot(
     med_inc = float(view_df["median_income"].median())
     med_ue = float(view_df["unemployment_rate"].median())
     med_ev = float(view_df["eviction_rate"].median())
+    base_rent = float(full_df["median_rent"].median())
+    base_inc = float(full_df["median_income"].median())
+    base_ue = float(full_df["unemployment_rate"].median())
+    base_ev = float(full_df["eviction_rate"].median())
     lbl_hi = float((view_df["risk_label"] == "High").mean())
 
     tier, rec_text = _portfolio_tier_and_recommendation(pred_view, view_df)
@@ -229,18 +243,38 @@ def _render_executive_snapshot(
 
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
-        st.metric("Median rent (2-BR FMR or panel)", f"${med_rent:,.0f}")
+        st.metric(
+            "🏠 Median rent",
+            f"${med_rent:,.0f}",
+            delta=f"{med_rent - base_rent:+,.0f} vs all",
+            delta_color="inverse",
+        )
     with k2:
-        st.metric("Median household income", f"${med_inc:,.0f}")
+        st.metric(
+            "💼 Median household income",
+            f"${med_inc:,.0f}",
+            delta=f"{med_inc - base_inc:+,.0f} vs all",
+            delta_color="normal",
+        )
     with k3:
-        st.metric("Median unemployment rate", f"{med_ue:.1%}")
+        st.metric(
+            "📉 Median unemployment",
+            f"{med_ue:.1%}",
+            delta=f"{(med_ue - base_ue) * 100:+.2f} pp vs all",
+            delta_color="inverse",
+        )
     with k4:
-        st.metric("Median eviction proxy", f"{med_ev:.1%}")
+        st.metric(
+            "🏚️ Median eviction proxy",
+            f"{med_ev:.1%}",
+            delta=f"{(med_ev - base_ev) * 100:+.2f} pp vs all",
+            delta_color="inverse",
+        )
     with k5:
-        if pred_df is not None and trained is not None:
-            st.metric("Portfolio tier (model)", tier_short)
+        if pred_view is not None and trained is not None:
+            st.metric("🚦 Portfolio tier (model)", tier_short)
         else:
-            st.metric("Portfolio tier (labels)", tier_short)
+            st.metric("🚦 Portfolio tier (labels)", tier_short)
 
     tier_display = html.escape(tier_short)
     rec_safe = html.escape(rec_text)
@@ -262,16 +296,14 @@ _hero()
 # ---------------------------------------------------------------------------
 st.sidebar.header("Workspace")
 prov = st.session_state.get("data_provenance") or {}
-st.sidebar.markdown(
-    """
-**How to use this app**
+with st.sidebar.expander("How to use this app", expanded=False):
+    st.markdown(
+        """
 1. Choose a region scope (or leave **All regions**) from **Region (display only)**.
 2. Click **Train / refresh model** to update predictions and snapshot KPIs.
 3. Review **Priority ranking**, **Budget simulation**, and **Counterfactual simulation**.
-
-**Developed by:** Sherriff Abdul-Hamid
 """
-)
+    )
 if prov.get("mode") == "hybrid":
     st.sidebar.success("Data: **HUD FMR + Census ACS** (hybrid)")
 elif prov.get("mode") == "synthetic_fallback":
@@ -374,6 +406,9 @@ if st.sidebar.button("Train / refresh model", type="primary", use_container_widt
         except Exception as exc:  # noqa: BLE001
             st.sidebar.error(f"Training failed: {exc}")
 
+st.sidebar.divider()
+st.sidebar.caption("**Developed by:** Sherriff Abdul-Hamid")
+
 # ---------------------------------------------------------------------------
 # Executive snapshot + dataset (main)
 # ---------------------------------------------------------------------------
@@ -383,6 +418,7 @@ view_df = filter_by_cities(df_full, city_filter)
 pred_view_for_snapshot = filter_by_cities(pred_df, city_filter) if pred_df is not None else None
 
 _render_executive_snapshot(
+    full_df=df_full,
     view_df=view_df,
     pred_view=pred_view_for_snapshot,
     prov=prov,
