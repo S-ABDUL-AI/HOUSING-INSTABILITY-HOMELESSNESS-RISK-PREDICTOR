@@ -328,16 +328,19 @@ with c2:
         }
         st.rerun()
 
-all_cities = sorted(st.session_state.df_full["city"].unique().tolist())
-with st.sidebar.expander("City filter (display)", expanded=False):
-    city_filter = st.sidebar.multiselect(
-        "Regions shown in main tables & charts",
-        options=all_cities,
-        default=all_cities,
-        help="Training always uses the **full** loaded dataset; this only filters what you **see**.",
-        label_visibility="visible",
-        key="city_filter_ms",
+_all_regions = sorted(st.session_state.df_full["city"].unique().tolist())
+_REGION_ALL = "(All regions)"
+_region_options = [_REGION_ALL] + _all_regions
+with st.sidebar.expander("Region (display only)", expanded=False):
+    _picked = st.sidebar.selectbox(
+        "Focus charts & tables on one region, or show all",
+        options=_region_options,
+        index=0,
+        help="Training always uses the **full** dataset. This only narrows what you **see** in the main workspace—one control, no tag list.",
+        key="region_display_select",
     )
+    city_filter: list[str] | None = None if _picked == _REGION_ALL else [_picked]
+    st.caption(f"**{len(_all_regions):,}** regions in this panel — choose **All** or one metro to drill in.")
 
 budget_m = st.sidebar.number_input("Simulation budget ($ millions)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
 
@@ -370,7 +373,7 @@ _render_executive_snapshot(df_full, pred_df, prov, st.session_state.trained)
 
 with st.expander("Dataset preview", expanded=False):
     st.caption(
-        "Training uses **all** rows in the loaded dataset; the table below respects the **City filter** expander in the sidebar. "
+        "Training uses **all** rows in the loaded dataset; the table below follows the **Region (display only)** control in the sidebar. "
         "**Hybrid default:** HUD 2‑BR FMR + Census ACS CBSA fields unless you uploaded CSV or use synthetic backup—see **Data lineage**."
     )
     st.dataframe(view_df.head(40), use_container_width=True, height=320)
