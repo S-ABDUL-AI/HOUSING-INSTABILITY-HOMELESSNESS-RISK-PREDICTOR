@@ -179,10 +179,11 @@ def _portfolio_tier_and_recommendation(pred_df: pd.DataFrame | None, df_full: pd
 
 
 def _render_executive_snapshot(
-    df_full: pd.DataFrame,
-    pred_df: pd.DataFrame | None,
+    view_df: pd.DataFrame,
+    pred_view: pd.DataFrame | None,
     prov: dict,
     trained,
+    selected_region: str,
 ) -> None:
     """Dynamic KPIs + recommendation visible without scrolling."""
     mode = prov.get("mode", "—")
@@ -193,27 +194,27 @@ def _render_executive_snapshot(
         "csv_upload": "Uploaded CSV",
     }.get(str(mode), str(mode))
 
-    med_rent = float(df_full["median_rent"].median())
-    med_inc = float(df_full["median_income"].median())
-    med_ue = float(df_full["unemployment_rate"].median())
-    med_ev = float(df_full["eviction_rate"].median())
-    lbl_hi = float((df_full["risk_label"] == "High").mean())
+    med_rent = float(view_df["median_rent"].median())
+    med_inc = float(view_df["median_income"].median())
+    med_ue = float(view_df["unemployment_rate"].median())
+    med_ev = float(view_df["eviction_rate"].median())
+    lbl_hi = float((view_df["risk_label"] == "High").mean())
 
-    tier, rec_text = _portfolio_tier_and_recommendation(pred_df, df_full)
+    tier, rec_text = _portfolio_tier_and_recommendation(pred_view, view_df)
     tier_short = tier.replace(" (label-based)", "").strip()
 
     top_city = "—"
-    if pred_df is not None and len(pred_df):
-        rk = rank_cities_by_risk(pred_df)
+    if pred_view is not None and len(pred_view):
+        rk = rank_cities_by_risk(pred_view)
         if not rk.empty:
             top_city = str(rk.iloc[0]["city"])
 
     headline = (
-        f"{df_full['city'].nunique():,} regions · {len(df_full):,} rows · "
+        f"Scope: {selected_region} · {view_df['city'].nunique():,} regions · {len(view_df):,} rows · "
         f"Labels High: {lbl_hi:.0%} · Panel: {mode_lbl}"
     )
-    if pred_df is not None:
-        ph = float((pred_df["predicted_risk"] == "High").mean())
+    if pred_view is not None:
+        ph = float((pred_view["predicted_risk"] == "High").mean())
         headline += f" · Model High: {ph:.0%}"
         if trained is not None:
             headline += f" · Accuracy {trained.accuracy:.0%}"
@@ -248,7 +249,7 @@ def _render_executive_snapshot(
         f"RECOMMENDED ACTION · {tier_display}</span><br/>{rec_safe}</div>",
         unsafe_allow_html=True,
     )
-    if pred_df is None:
+    if pred_view is None:
         st.caption("Train the model in the sidebar to add **predicted** risk shares, accuracy, and geography-level recommendations in this strip.")
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -261,6 +262,16 @@ _hero()
 # ---------------------------------------------------------------------------
 st.sidebar.header("Workspace")
 prov = st.session_state.get("data_provenance") or {}
+st.sidebar.markdown(
+    """
+**How to use this app**
+1. Choose a region scope (or leave **All regions**) from **Region (display only)**.
+2. Click **Train / refresh model** to update predictions and snapshot KPIs.
+3. Review **Priority ranking**, **Budget simulation**, and **Counterfactual simulation**.
+
+**Developed by:** Sherriff Abdul-Hamid
+"""
+)
 if prov.get("mode") == "hybrid":
     st.sidebar.success("Data: **HUD FMR + Census ACS** (hybrid)")
 elif prov.get("mode") == "synthetic_fallback":
@@ -340,6 +351,7 @@ with st.sidebar.expander("Region (display only)", expanded=False):
         key="region_display_select",
     )
     city_filter: list[str] | None = None if _picked == _REGION_ALL else [_picked]
+    selected_region_label = "All regions" if _picked == _REGION_ALL else str(_picked)
     st.caption(f"**{len(_all_regions):,}** regions in this panel — choose **All** or one metro to drill in.")
 
 budget_m = st.sidebar.number_input("Simulation budget ($ millions)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
@@ -368,8 +380,15 @@ if st.sidebar.button("Train / refresh model", type="primary", use_container_widt
 df_full = st.session_state.df_full
 pred_df: pd.DataFrame | None = st.session_state.predictions_df
 view_df = filter_by_cities(df_full, city_filter)
+pred_view_for_snapshot = filter_by_cities(pred_df, city_filter) if pred_df is not None else None
 
-_render_executive_snapshot(df_full, pred_df, prov, st.session_state.trained)
+_render_executive_snapshot(
+    view_df=view_df,
+    pred_view=pred_view_for_snapshot,
+    prov=prov,
+    trained=st.session_state.trained,
+    selected_region=selected_region_label,
+)
 
 with st.expander("Dataset preview", expanded=False):
     st.caption(
