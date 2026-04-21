@@ -223,23 +223,22 @@ def _render_executive_snapshot(
         if not rk.empty:
             top_city = str(rk.iloc[0]["city"])
 
+    region_safe = html.escape(selected_region)
+    mode_safe = html.escape(mode_lbl)
     headline = (
-        f"Scope: {selected_region} · {view_df['city'].nunique():,} regions · {len(view_df):,} rows · "
-        f"Labels High: {lbl_hi:.0%} · Panel: {mode_lbl}"
+        f"Scope: <strong>{region_safe}</strong> · {view_df['city'].nunique():,} regions · {len(view_df):,} rows · "
+        f"Labels High: {lbl_hi:.0%} · Panel: {mode_safe}"
     )
     if pred_view is not None:
         ph = float((pred_view["predicted_risk"] == "High").mean())
         headline += f" · Model High: {ph:.0%}"
         if trained is not None:
             headline += f" · Accuracy {trained.accuracy:.0%}"
-        headline += f" · Top pressure: {top_city}"
+        headline += f" · Top pressure: {html.escape(top_city)}"
 
     st.markdown('<div class="exec-snapshot">', unsafe_allow_html=True)
     st.markdown('<p class="snap-title">Executive snapshot</p>', unsafe_allow_html=True)
-    st.markdown(
-        f'<p class="snap-headline">{html.escape(headline)}</p>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<p class="snap-headline">{headline}</p>', unsafe_allow_html=True)
 
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
