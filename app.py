@@ -180,22 +180,33 @@ def _hero() -> None:
 
 
 def _portfolio_tier_and_recommendation(pred_df: pd.DataFrame | None, df_full: pd.DataFrame) -> tuple[str, str]:
-    """Pick a single tier + policy line for the headline (predicted risk if available, else training labels)."""
-    if pred_df is not None and "predicted_risk" in pred_df.columns:
+    """Pick a region-sensitive tier + policy line for the snapshot."""
+    if pred_df is not None and "predicted_risk" in pred_df.columns and len(pred_df):
+        # Prefer probability-based tiering so the status reacts to regional changes
+        # even when hard class labels are mostly Low.
+        if "p_high" in pred_df.columns:
+            mean_p_high = float(pred_df["p_high"].mean())
+            if mean_p_high >= 0.55:
+                return "High", recommendation_for_risk("High")
+            if mean_p_high >= 0.30:
+                return "Medium", recommendation_for_risk("Medium")
+            return "Low", recommendation_for_risk("Low")
+
         s = pred_df["predicted_risk"]
         ph = float((s == "High").mean())
         pm = float((s == "Medium").mean())
-        if ph >= 0.10:
+        if ph >= 0.18:
             return "High", recommendation_for_risk("High")
-        if ph + pm >= 0.38:
+        if ph + pm >= 0.45:
             return "Medium", recommendation_for_risk("Medium")
         return "Low", recommendation_for_risk("Low")
+
+    # Label-based fallback (pre-train or no prediction frame).
     s = df_full["risk_label"]
-    ph = float((s == "High").mean())
-    pm = float((s == "Medium").mean())
-    if ph >= 0.10:
+    score = s.map({"Low": 0.0, "Medium": 1.0, "High": 2.0}).mean()
+    if float(score) >= 1.20:
         return "High (label-based)", recommendation_for_risk("High")
-    if ph + pm >= 0.38:
+    if float(score) >= 0.55:
         return "Medium (label-based)", recommendation_for_risk("Medium")
     return "Low (label-based)", recommendation_for_risk("Low")
 
@@ -285,14 +296,13 @@ def _render_executive_snapshot(
     is_high = tier_short == "High"
     is_medium = tier_short == "Medium"
     status_text = "Emergency" if is_high else ("Elevated monitoring" if is_medium else "No emergency")
-    status_delta_color = "inverse" if (is_high or is_medium) else "normal"
     pill_class = "tier-pill-high" if is_high else ("tier-pill-medium" if is_medium else "tier-pill-low")
 
     with k5:
         if pred_view is not None and trained is not None:
-            st.metric("Portfolio tier (model)", tier_short, delta=status_text, delta_color=status_delta_color)
+            st.metric("Portfolio tier (model)", tier_short)
         else:
-            st.metric("Portfolio tier (labels)", tier_short, delta=status_text, delta_color=status_delta_color)
+            st.metric("Portfolio tier (labels)", tier_short)
         st.markdown(
             f"<span class='tier-pill {pill_class}'>{html.escape(status_text)}</span>",
             unsafe_allow_html=True,
@@ -444,7 +454,7 @@ with st.sidebar.expander("How to use this app", expanded=False):
 1. Choose a region scope (or leave **All regions**) from **Region (display only)**.
 2. Click **Train / refresh model** to update predictions and snapshot KPIs.
 3. Review **Priority ranking**, **Budget simulation**, and **Counterfactual simulation**.
-4. Download the one-page **Insight report (McKinsey-style)** from the **Insight report** card below the Executive snapshot.
+4. Download the one-page **Insight report** from the **Insight report** card below the Executive snapshot.
 """
     )
 if prov.get("mode") == "hybrid":
@@ -570,8 +580,8 @@ _render_executive_snapshot(
 )
 
 st.markdown('<div class="section-card">', unsafe_allow_html=True)
-st.subheader("Insight report (McKinsey-style)")
-st.caption("Download location: use the button below. The exported HTML is always rendered in a consistent McKinsey-style brief format.")
+st.subheader("Insight report")
+st.caption("Download location: use the button below.")
 report_html = _build_mckinsey_report_html(
     view_df=view_df,
     pred_view=pred_view_for_snapshot,
