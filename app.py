@@ -92,6 +92,18 @@ st.markdown(
         background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px;
         padding: 0.85rem 1rem; margin-top: 0.5rem; color: #1e3a8a; font-size: 1.02rem; line-height: 1.5; font-weight: 600;
     }
+    .tier-pill {
+        display: inline-block;
+        padding: 0.22rem 0.52rem;
+        border-radius: 999px;
+        font-size: 0.74rem;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        margin-top: 0.28rem;
+    }
+    .tier-pill-high { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+    .tier-pill-medium { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+    .tier-pill-low { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
     .exec-snapshot div[data-testid="stMetric"] {
         background: #f8fafc;
         border: 1px solid #dbe7f3;
@@ -269,11 +281,21 @@ def _render_executive_snapshot(
             delta=f"{(med_ev - base_ev) * 100:+.2f} pp vs all",
             delta_color="inverse",
         )
+    is_high = tier_short == "High"
+    is_medium = tier_short == "Medium"
+    status_text = "Emergency" if is_high else ("Elevated monitoring" if is_medium else "No emergency")
+    status_delta_color = "inverse" if (is_high or is_medium) else "normal"
+    pill_class = "tier-pill-high" if is_high else ("tier-pill-medium" if is_medium else "tier-pill-low")
+
     with k5:
         if pred_view is not None and trained is not None:
-            st.metric("🚦 Portfolio tier (model)", tier_short)
+            st.metric("🚦 Portfolio tier (model)", tier_short, delta=status_text, delta_color=status_delta_color)
         else:
-            st.metric("🚦 Portfolio tier (labels)", tier_short)
+            st.metric("🚦 Portfolio tier (labels)", tier_short, delta=status_text, delta_color=status_delta_color)
+        st.markdown(
+            f"<span class='tier-pill {pill_class}'>{html.escape(status_text)}</span>",
+            unsafe_allow_html=True,
+        )
 
     tier_display = html.escape(tier_short)
     rec_safe = html.escape(rec_text)
