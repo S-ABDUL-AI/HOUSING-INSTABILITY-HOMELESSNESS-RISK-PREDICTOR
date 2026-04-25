@@ -1,5 +1,5 @@
 """
-Housing Instability & Homelessness Risk Predictor — Streamlit entrypoint.
+Housing Stability Risk Monitor — Streamlit entrypoint.
 
 Trains a RandomForest on regional housing / labor signals and surfaces policy-ready views:
 rankings, budget simulation, counterfactual rent / unemployment levers, and an executive brief.
@@ -32,7 +32,7 @@ from policy import (
 # Page & theme
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Housing instability risk predictor",
+    page_title="Housing Stability Risk Monitor",
     page_icon="🏘️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -169,7 +169,7 @@ def _hero() -> None:
     st.markdown(
         """
 <div class="exec-hero">
-  <h1>Housing instability & homelessness risk predictor</h1>
+  <h1>Housing Stability Risk Monitor</h1>
   <p>
     <b>At-a-glance:</b> the <b>Executive snapshot</b> below refreshes from your loaded panel (HUD + Census hybrid by default, or backup synthetic).
     <b>Train the model</b> in the sidebar to surface predicted risk, accuracy, and a portfolio-level <b>recommendation</b>—then scroll for rankings, budget simulation, and counterfactuals.
